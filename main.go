@@ -1,17 +1,18 @@
 package main
 
 import (
-	"github.com/victormoneratto/telegram-bot-api"
-	"github.com/victormoneratto/monebot/util"
+	"fmt"
 	"log"
 	"os"
-	"strings"
-	"unicode"
-	"fmt"
-	"time"
-	"gopkg.in/mgo.v2"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
+	"unicode"
+
+	"github.com/victormoneratto/monebot/util"
+	"github.com/victormoneratto/telegram-bot-api"
+	"gopkg.in/mgo.v2"
 )
 
 func main() {
@@ -38,7 +39,7 @@ func main() {
 		panic(err)
 	}
 
-	log.Println("@" + bot.Self.UserName, "started")
+	log.Println("@"+bot.Self.UserName, "started")
 
 	// Indefinitely loop for updates
 	for update := range updates {
@@ -164,7 +165,7 @@ func CountVerbs(s string) int {
 	matches := regexp.MustCompile("%(?:\\[(\\d+)\\])?s").FindAllStringSubmatch(s, -1)
 	var numNotIndexed, maxIndex int
 	for _, submatches := range matches {
-		if indexStr := submatches[len(submatches) - 1]; indexStr == "" {
+		if indexStr := submatches[len(submatches)-1]; indexStr == "" {
 			numNotIndexed++
 		} else {
 			index, err := strconv.Atoi(indexStr)
@@ -194,7 +195,7 @@ func RemoveUnsupportedVerbs(s string) string {
 
 			// Handle indexed verb
 			if start < end {
-				index, err := strconv.Atoi(match[start + 1:end])
+				index, err := strconv.Atoi(match[start+1 : end])
 				if err != nil {
 					return "%s"
 				}

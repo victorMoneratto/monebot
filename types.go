@@ -8,17 +8,17 @@ import (
 // Answer holds the possible messages the bot can send
 type Answer struct {
 	Text      string `bson:"text,omitempty"`
-	NumParams int `bson:"numParams"`
+	NumParams int    `bson:"numParams"`
 }
 
 // Command holds the data about for persistent commands
 type Command struct {
-	Pack       string `bson:"pack"`
-	Name       string `bson:"name"`
-	Answer     Answer `bson:"answer"`
+	Pack       string    `bson:"pack"`
+	Name       string    `bson:"name"`
+	Answer     Answer    `bson:"answer"`
 	Time       time.Time `bson:"time"`
-	Creator    string `bson:"creator,omitempty"`
-	NumChanged int `bson:"numChanged,omitempty"`
+	Creator    string    `bson:"creator,omitempty"`
+	NumChanged int       `bson:"numChanged,omitempty"`
 }
 
 // FullName returns the a string of the form <pack>.<name>

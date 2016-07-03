@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/technoweenie/multipartstreamer"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -16,6 +15,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/technoweenie/multipartstreamer"
 )
 
 // BotAPI allows you to interact with the Telegram Bot API.

@@ -68,7 +68,7 @@ func (db Database) FindCommand(pack, name string, numParams int) (Command, error
 func (db Database) UpsertCommand(c Command) error {
 	_, err := db.commands.Upsert(
 		bson.M{"pack": c.Pack,
-			"name": c.Name,
+			"name":             c.Name,
 			"answer.numParams": c.Answer.NumParams}, &c)
 
 	return err
