@@ -42,15 +42,14 @@ type User struct {
 // name as available.
 func (u *User) String() string {
 	if u.UserName != "" {
-		return u.UserName
+		return fmt.Sprintf("@%s", u.UserName)
 	}
 
-	name := u.FirstName
-	if u.LastName != "" {
-		name += " " + u.LastName
+	if u.LastName == "" {
+		return u.FirstName
 	}
+	return fmt.Sprint(u.FirstName, u.LastName)
 
-	return name
 }
 
 // GroupChat is a group chat.

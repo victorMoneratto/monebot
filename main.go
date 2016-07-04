@@ -12,7 +12,6 @@ import (
 
 	"github.com/victormoneratto/monebot/util"
 	"github.com/victormoneratto/telegram-bot-api"
-	"gopkg.in/mgo.v2"
 )
 
 func main() {
@@ -43,123 +42,216 @@ func main() {
 
 	// Indefinitely loop for updates
 	for update := range updates {
-		if update.Message == nil {
-			log.Printf("Received unsupported update: %#v\n", update)
-			continue
-		}
-
-		log.Printf("Received: '%s' from %s\n", update.Message.Text, update.Message.From)
-
-		if !update.Message.IsCommand() {
-			continue
-		}
-
-		// Parse command
-		needsPack, pack, name, param := Parse(update.Message.Text)
-		if needsPack {
-			// Message doesn't explicit a pack, get the default for the chat
-			pack, err = db.FindPack(update.Message.Chat.ID)
-			if err != nil && err != mgo.ErrNotFound {
-				log.Println("Error finding pack:", err)
+		go func() {
+			var ans Answer // Set a value for Answer to reply on chat
+			var reply int
+			var forceReply tgbotapi.ForceReply
+			if update.Message == nil {
+				log.Printf("Received unsupported update: %#v\n", update)
+				return
 			}
-		}
 
-		if name == "" {
-			log.Println("Unsupported message text", update.Message.Text)
-			continue
-		}
+			log.Printf("Received: '%s' from %s\n", update.Message.Text, update.Message.From)
 
-		var ans Answer // Set a value for Answer to reply on chat
-		switch name {
+			if !update.Message.IsCommand() {
+				state, err := db.FindState(update.Message.Chat.ID, update.Message.From.String())
+				if err != nil {
+					log.Println("Error finding state:", err)
+					return
+				}
 
-		// Update or Insert a command
-		case "neverforget":
-			fallthrough
-		case "never4get":
-			err := SaveCommand(param, update.Message.From.String(), update.Message.Chat.ID, db)
+				if state.Waiting.ForCommand {
+					pack, name, param, _ := Parse(update.Message.Text, update.Message.Chat.ID, db)
+					if state.Waiting.Pack == "" {
+						state.Waiting.Pack = pack
+					}
+					if state.Waiting.Command == "" {
+						state.Waiting.Command = name
+					} else {
+						param = update.Message.Text
+					}
+
+					if state.Waiting.Command != "" && param != "" {
+						c, err := SaveCommand(state.Waiting.Pack, state.Waiting.Command,
+							update.Message.Text, update.Message.From.String(), db)
+						if err != nil {
+							log.Println("Error saving command:", err)
+							return
+						}
+						ans.Text = fmt.Sprintf("Saved command *%s* `(with %d parameters)`",
+							EscapeMarkdown(c.FullName()), c.Answer.NumParams)
+						ans.Parse = ParseMarkdown
+
+						err = db.RemoveState(update.Message.Chat.ID, update.Message.From.String())
+						if err != nil {
+							log.Println("Error removing state:", err)
+							return
+						}
+					} else {
+						db.UpsertState(
+							State{
+								Chat:       update.Message.Chat.ID,
+								User:       update.Message.From.String(),
+								LastUpdate: time.Now(),
+								Waiting: WaitingState{
+									ForCommand: true,
+									Pack:       pack,
+									Command:    name}})
+
+						if name != "" && param == "" {
+							forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
+							ans.Text = "Please, send me the content for the command"
+							reply = update.Message.MessageID
+						}
+					}
+				}
+			} else {
+
+				// Parse command
+				pack, name, param, params := Parse(update.Message.Text, update.Message.Chat.ID, db)
+
+				if name == "" {
+					log.Println("Unsupported message text", update.Message.Text)
+					return
+				}
+
+				switch name {
+
+				case "neverforget":
+					fallthrough
+				case "never4get":
+
+					pack, name, param, _ := Parse(param, update.Message.Chat.ID, db)
+
+					if param == "" {
+						forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
+						s := State{
+							Chat: update.Message.Chat.ID,
+							User: update.Message.From.String(),
+							Waiting: WaitingState{
+								ForCommand: true,
+								Pack:       pack,
+								Command:    name}}
+						err := db.UpsertState(s) // Save that we're waiting for command
+						if err != nil {
+							log.Println("Error upserting state:", err)
+							return
+						}
+						if name == "" {
+							ans.Text = "Please, send me a name for the command"
+						} else {
+							ans.Text = "Please, send me a content for the command"
+						}
+						reply = update.Message.MessageID
+						break
+					} else {
+						// Update or Insert a command
+						c, err := SaveCommand(pack, name, param, update.Message.From.String(), db)
+						if err != nil {
+							log.Println("Error saving command:", err)
+							return
+						}
+						ans.Text = fmt.Sprintf("Saved command *%s* `(with %d parameters)`",
+							EscapeMarkdown(c.FullName()), c.Answer.NumParams)
+						ans.Parse = ParseMarkdown
+						return
+					}
+
+				case "i":
+					// Show info about command
+					pack, name, _, params := Parse(param, update.Message.Chat.ID, db)
+					c, err := db.FindCommand(pack, name, len(params))
+					if err != nil {
+						log.Println("Error finding command:", err)
+						return
+					}
+
+					year, month, day := c.Time.Date()
+					creator := EscapeMarkdown(c.Creator)
+					if !strings.HasPrefix(c.Creator, "@") {
+						creator = fmt.Sprintf("`%s`", creator)
+					}
+					ans.Text = fmt.Sprintf(
+						"*%s* `(with %d parameters)`\n"+
+							"_%s_\n\n"+
+							"*Last updated by* %s *on* `%d/%d/%d`",
+						EscapeMarkdown(c.FullName()), c.Answer.NumParams,
+						EscapeMarkdown(c.Answer.Text),
+						creator, year, month, day)
+
+					ans.Parse = ParseMarkdown
+
+				default:
+					// Search for a saved command
+					c, err := db.FindCommand(pack, name, len(params))
+					if err != nil {
+						log.Printf("Error finding command %s.%s %v: %s", pack, name, param, err)
+					}
+
+					ans = c.Answer
+					if c.Answer.NumParams > 0 {
+						p := make([]interface{}, 0, len(params))
+						for _, param := range params {
+							p = append(p, param)
+						}
+						ans.Text = fmt.Sprintf(ans.Text, p...)
+					}
+
+					if update.Message.ReplyToMessage != nil {
+						reply = update.Message.ReplyToMessage.MessageID
+					}
+				}
+
+				if ans.Text == "" {
+					return
+				}
+
+				log.Printf("Handled command %s: %s.%s %s\n", update.Message.From, pack, name, param)
+			}
+
+			msg := tgbotapi.NewMessage(update.Message.Chat.ID, ans.Text)
+			msg.ParseMode = ans.Parse
+			msg.ReplyToMessageID = reply
+			msg.ReplyMarkup = forceReply
+
+			_, err = bot.Send(msg)
 			if err != nil {
-				log.Println("Error saving command:", err)
-				continue
+				log.Println("Error sending message:", err)
 			}
 
-		// Search for a saved command
-		default:
-			ans, err = FindCommand(pack, name, param, db)
-			if err != nil {
-				log.Printf("Error finding command %s.%s %v: %s", pack, name, param, err)
-			}
-		}
-
-		if ans.Text == "" {
-			continue
-		}
-
-		msg := tgbotapi.NewMessage(update.Message.Chat.ID, ans.Text)
-		if update.Message.ReplyToMessage != nil {
-			msg.ReplyToMessageID = update.Message.ReplyToMessage.MessageID
-		}
-
-		_, err = bot.Send(msg)
-		if err != nil {
-			log.Println("Error sending message:", err)
-			continue
-		}
-
-		log.Printf("Answered %s: %s.%s %s\n", update.Message.From, pack, name, param)
+		}()
 	}
-}
-
-// FindCommand returns the answer from the saved command
-func FindCommand(pack, name, param string, db *Database) (Answer, error) {
-	var ans Answer
-	params := strings.Split(param, ", ")
-	if params[0] == "" {
-		params = nil
-	}
-	c, err := db.FindCommand(pack, name, len(params))
-	if err != nil {
-		return ans, err
-	}
-
-	ans = c.Answer
-	if ans.NumParams > 0 {
-		p := make([]interface{}, 0, len(params))
-		for _, param := range params {
-			p = append(p, param)
-		}
-		ans.Text = fmt.Sprintf(ans.Text, p...)
-	}
-
-	return ans, nil
 }
 
 // SaveCommand updates or inserts a command
-func SaveCommand(param, creator string, chat int64, db *Database) error {
+func SaveCommand(pack, name, param, creator string, db *Database) (Command, error) {
 	var c Command
-	var needsPack bool
 	var err error
 
-	needsPack, c.Pack, c.Name, param = Parse(param)
+	c.Pack = pack
+	c.Name = name
 	c.Answer.Text = RemoveUnsupportedVerbs(param)
 	c.Answer.NumParams = CountVerbs(c.Answer.Text)
 	c.Creator = creator
 	c.Time = time.Now()
-	if needsPack {
-		c.Pack, err = db.FindPack(chat)
-		if err != nil && err != mgo.ErrNotFound {
-			return err
-		}
-	}
 
 	err = db.UpsertCommand(c)
 	if err != nil {
-		return err
+		return c, err
 	}
 
-	return nil
+	return c, nil
 }
 
-// CountVerbs retuns the number of string verbs (%s, %[1]s...)
+func EscapeMarkdown(s string) string {
+	// TODO a regex to escape links as well
+	return regexp.MustCompile("[\\*_`]").ReplaceAllStringFunc(s,
+		func(match string) string {
+			return "\\" + match
+		})
+}
+
+// CountVerbs returns the number of string verbs (%s, %[1]s...)
 // taking into consideration indexed and non-indexed verbs
 func CountVerbs(s string) int {
 	matches := regexp.MustCompile("%(?:\\[(\\d+)\\])?s").FindAllStringSubmatch(s, -1)
@@ -207,10 +299,9 @@ func RemoveUnsupportedVerbs(s string) string {
 }
 
 // Parse returns command information from message
-func Parse(message string) (needsPack bool, pack, name string, param string) {
+func Parse(message string, chat int64, db *Database) (pack, name string, param string, params []string) {
 	// Remove heading "/"
 	message = strings.TrimPrefix(message, "/")
-
 	var fullName string
 	// There's no strings.SplitFunc, we'll separate the first word manually
 	space := strings.IndexFunc(message, unicode.IsSpace)
@@ -234,7 +325,15 @@ func Parse(message string) (needsPack bool, pack, name string, param string) {
 	} else {
 		// No pack was specified
 		name = nameParts[0]
-		needsPack = true
+		var err error
+		pack, err = db.FindPack(chat)
+		if err != nil {
+			pack = ""
+		}
+	}
+
+	if len(param) > 0 {
+		params = strings.Split(param, ", ")
 	}
 
 	return

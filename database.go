@@ -1,8 +1,13 @@
 package main
 
 import (
+	"errors"
 	"gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+)
+
+var (
+	ErrNotFound = errors.New("Not found")
 )
 
 // Database holds the necessary data for all persistent data operations
@@ -10,6 +15,7 @@ type Database struct {
 	session  *mgo.Session
 	commands *mgo.Collection
 	packs    *mgo.Collection
+	states   *mgo.Collection
 }
 
 // NewDatabase returns a new database connected through the connURI
@@ -23,6 +29,7 @@ func NewDatabase(connURI string) (*Database, error) {
 
 	db.commands = db.session.DB("").C("commands")
 	db.packs = db.session.DB("").C("packs")
+	db.states = db.session.DB("").C("states")
 
 	return &db, nil
 }
@@ -37,6 +44,9 @@ func (db Database) FindPack(chat int64) (string, error) {
 	var pack Pack
 	err := db.packs.Find(bson.M{"chats": chat}).One(&pack)
 	if err != nil {
+		if err == mgo.ErrNotFound {
+			err = ErrNotFound
+		}
 		return "", err
 	}
 	return pack.Name, nil
@@ -58,6 +68,9 @@ func (db Database) FindCommand(pack, name string, numParams int) (Command, error
 			}}).Sort("-pack").One(&c)
 
 	if err != nil {
+		if err == mgo.ErrNotFound {
+			err = ErrNotFound
+		}
 		return c, err
 	}
 
@@ -72,4 +85,27 @@ func (db Database) UpsertCommand(c Command) error {
 			"answer.numParams": c.Answer.NumParams}, &c)
 
 	return err
+}
+
+func (db Database) FindState(chat int64, user string) (State, error) {
+	var s State
+	err := db.states.Find(
+		bson.M{"chat": chat,
+			"user": user}).One(&s)
+	if err == mgo.ErrNotFound {
+		err = ErrNotFound
+	}
+	return s, err
+}
+
+func (db Database) UpsertState(s State) error {
+	_, err := db.states.Upsert(
+		bson.M{"chat": s.Chat,
+			"user": s.User}, &s)
+
+	return err
+}
+
+func (db Database) RemoveState(chat int64, user string) error {
+	return db.states.Remove(bson.M{"chat": chat, "user": user})
 }

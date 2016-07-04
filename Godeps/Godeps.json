@@ -10,8 +10,8 @@
 		},
 		{
 			"ImportPath": "github.com/victormoneratto/telegram-bot-api",
-			"Comment": "v4.4.0-6-g1daed40",
-			"Rev": "1daed40422d154dcd781d9fa6b5ca1add15635bf"
+			"Comment": "v4.4.0-7-ga2dbdd4",
+			"Rev": "a2dbdd4f375956b122eebdef392d6ca2050dc8b0"
 		},
 		{
 			"ImportPath": "gopkg.in/mgo.v2",

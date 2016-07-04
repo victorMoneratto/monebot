@@ -5,11 +5,31 @@ import (
 	"time"
 )
 
+type State struct {
+	Chat       int64        `bson:"chat"`
+	User       string       `bson:"user"`
+	Waiting    WaitingState `bson:"waiting,omitempty"`
+	LastUpdate time.Time    `bson:"lastUpdate"`
+}
+
+type WaitingState struct {
+	ForCommand bool   `bson:"forCommand,omitempty"`
+	Pack       string `bson:"pack,omitempty"`
+	Command    string `bson:"command,omitempty"`
+}
+
 // Answer holds the possible messages the bot can send
 type Answer struct {
 	Text      string `bson:"text,omitempty"`
 	NumParams int    `bson:"numParams"`
+	Parse     string `bson:"parseMode,omitempty"`
+	Sticker   string `bson:"sticker,omitempty"`
 }
+
+const (
+	ParseMarkdown = "Markdown"
+	ParseHTML     = "HTML"
+)
 
 // Command holds the data about for persistent commands
 type Command struct {
