@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/victormoneratto/monebot"
 	"github.com/victormoneratto/monebot/util"
 	"github.com/victormoneratto/telegram-bot-api"
 )
@@ -26,7 +27,7 @@ func main() {
 	}
 
 	// Connect to database
-	db, err := NewDatabase(util.MustGetEnv("DATABASE_CONN_URI"))
+	db, err := monebot.NewDatabase(util.MustGetEnv("DATABASE_CONN_URI"))
 	if err != nil {
 		panic(err)
 	}
@@ -43,7 +44,7 @@ func main() {
 	// Indefinitely loop for updates
 	for update := range updates {
 		go func() {
-			var ans Answer // Set a value for Answer to reply on chat
+			var ans monebot.Answer // Set a value for Answer to reply on chat
 			var reply int
 			var forceReply tgbotapi.ForceReply
 			if update.Message == nil {
@@ -80,7 +81,7 @@ func main() {
 						}
 						ans.Text = fmt.Sprintf("Saved command *%s* `(with %d parameters)`",
 							EscapeMarkdown(c.FullName()), c.Answer.NumParams)
-						ans.Parse = ParseMarkdown
+						ans.Parse = monebot.ParseMarkdown
 
 						err = db.RemoveState(update.Message.Chat.ID, update.Message.From.String())
 						if err != nil {
@@ -89,11 +90,11 @@ func main() {
 						}
 					} else {
 						db.UpsertState(
-							State{
+							monebot.State{
 								Chat:       update.Message.Chat.ID,
 								User:       update.Message.From.String(),
 								LastUpdate: time.Now(),
-								Waiting: WaitingState{
+								Waiting: monebot.WaitingState{
 									ForCommand: true,
 									Pack:       pack,
 									Command:    name}})
@@ -125,10 +126,10 @@ func main() {
 
 					if param == "" {
 						forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
-						s := State{
+						s := monebot.State{
 							Chat: update.Message.Chat.ID,
 							User: update.Message.From.String(),
-							Waiting: WaitingState{
+							Waiting: monebot.WaitingState{
 								ForCommand: true,
 								Pack:       pack,
 								Command:    name}}
@@ -153,7 +154,7 @@ func main() {
 						}
 						ans.Text = fmt.Sprintf("Saved command *%s* `(with %d parameters)`",
 							EscapeMarkdown(c.FullName()), c.Answer.NumParams)
-						ans.Parse = ParseMarkdown
+						ans.Parse = monebot.ParseMarkdown
 						return
 					}
 
@@ -179,7 +180,7 @@ func main() {
 						EscapeMarkdown(c.Answer.Text),
 						creator, year, month, day)
 
-					ans.Parse = ParseMarkdown
+					ans.Parse = monebot.ParseMarkdown
 
 				default:
 					// Search for a saved command
@@ -224,8 +225,8 @@ func main() {
 }
 
 // SaveCommand updates or inserts a command
-func SaveCommand(pack, name, param, creator string, db *Database) (Command, error) {
-	var c Command
+func SaveCommand(pack, name, param, creator string, db *monebot.Database) (monebot.Command, error) {
+	var c monebot.Command
 	var err error
 
 	c.Pack = pack
@@ -299,7 +300,7 @@ func RemoveUnsupportedVerbs(s string) string {
 }
 
 // Parse returns command information from message
-func Parse(message string, chat int64, db *Database) (pack, name string, param string, params []string) {
+func Parse(message string, chat int64, db *monebot.Database) (pack, name string, param string, params []string) {
 	// Remove heading "/"
 	message = strings.TrimPrefix(message, "/")
 	var fullName string
