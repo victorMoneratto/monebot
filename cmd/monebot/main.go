@@ -62,45 +62,73 @@ func main() {
 				}
 
 				if state.Waiting.ForCommand {
+					cmd := monebot.Command{}
 					pack, name, param, _ := Parse(update.Message.Text, update.Message.Chat.ID, db)
-					if state.Waiting.Pack == "" {
-						state.Waiting.Pack = pack
-					}
-					if state.Waiting.Command == "" {
-						state.Waiting.Command = name
+
+					if sticker := update.Message.Sticker; sticker != nil {
+						cmd.Answer = NewStickerAnswer(sticker.FileID)
+					} else if state.Waiting.Command != "" {
+						// We already had a name, the whole message is the text content
+						cmd.Answer = NewTextAnswer(update.Message.Text)
 					} else {
-						param = update.Message.Text
+						cmd.Answer = NewTextAnswer(param)
 					}
 
-					if state.Waiting.Command != "" && param != "" {
-						c, err := SaveCommand(state.Waiting.Pack, state.Waiting.Command,
-							update.Message.Text, update.Message.From.String(), db)
-						if err != nil {
-							log.Println("Error saving command:", err)
-							return
-						}
+					if state.Waiting.Pack != "" {
+						cmd.Pack = state.Waiting.Pack
+					} else {
+						cmd.Pack = pack
+					}
 
-						ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
+					if state.Waiting.Command != "" {
+						cmd.Name = state.Waiting.Command
+					} else {
+						cmd.Name = name
+					}
 
-						err = db.RemoveState(update.Message.Chat.ID, update.Message.From.ID)
-						if err != nil {
-							log.Println("Error removing state:", err)
-							return
+					if cmd.Name != "" {
+						var c monebot.Command
+						if cmd.Answer.Text != "" || cmd.Answer.Sticker != "" {
+							// NOTE: This should receive the monebot.Command, probably
+							c, err = SaveCommand(cmd.Pack, cmd.Name,
+								update.Message.From.String(), cmd.Answer, db)
+							if err != nil {
+								log.Println("Error saving command:", err)
+								return
+							}
+
+							ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
+
+							err = db.RemoveState(update.Message.Chat.ID, update.Message.From.ID)
+							if err != nil {
+								log.Println("Error removing state:", err)
+								return
+							}
+						} else {
+							s := monebot.NewWaitingState(update.Message.Chat.ID,
+								update.Message.From.ID,
+								monebot.WaitingState{
+									ForCommand: true,
+									Pack:       cmd.Pack,
+									Command:    cmd.Name})
+							db.UpsertState(s)
+
+							replyTo = update.Message.MessageID
+							forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
+							ans.Text, ans.Parse = monebot.MessageMissingContent()
 						}
 					} else {
+						//NOTE: This is the same code for the missing content case, refactor
 						s := monebot.NewWaitingState(update.Message.Chat.ID,
 							update.Message.From.ID,
 							monebot.WaitingState{
 								ForCommand: true,
-								Pack:       pack,
-								Command:    name})
+								Pack:       pack})
 						db.UpsertState(s)
 
-						if name != "" && param == "" {
-							forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
-							ans.Text, ans.Parse = monebot.MessageMissingContent()
-							replyTo = update.Message.MessageID
-						}
+						replyTo = update.Message.MessageID
+						forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
+						ans.Text, ans.Parse = monebot.MessageMissingName()
 					}
 				}
 			} else {
@@ -118,10 +146,11 @@ func main() {
 				case "neverforget":
 					fallthrough
 				case "never4get":
-
 					pack, name, param, _ := Parse(param, update.Message.Chat.ID, db)
 
 					if param == "" {
+						// NOTE: This is almost the same as lines above, REFACTOR IMMEDIATELY
+						replyTo = update.Message.MessageID
 						forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
 						s := monebot.NewWaitingState(update.Message.Chat.ID,
 							update.Message.From.ID,
@@ -141,15 +170,15 @@ func main() {
 						} else {
 							ans.Text, ans.Parse = monebot.MessageMissingContent()
 						}
-						replyTo = update.Message.MessageID
 					} else {
+						//NOTE: disabled to avoid even more code duplication for now
 						// Update or Insert a command
-						c, err := SaveCommand(pack, name, param, update.Message.From.String(), db)
-						if err != nil {
-							log.Println("Error saving command:", err)
-							return
-						}
-						ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
+						//c, err := SaveCommand(pack, name, NewTextAnswer(param), update.Message.From.String(), db)
+						//if err != nil {
+						//	log.Println("Error saving command:", err)
+						//	return
+						//}
+						//ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
 					}
 
 				case "i":
@@ -187,31 +216,45 @@ func main() {
 				log.Printf("Answered known command from %s: %s.%s [%s]\n", update.Message.From, pack, name, param)
 			}
 
-			if ans.Text != "" {
+			var send tgbotapi.Chattable
+			if ans.Sticker != "" {
+				sticker := tgbotapi.NewStickerShare(update.Message.Chat.ID, ans.Sticker)
+				send = sticker
+			} else if ans.Text != "" {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, ans.Text)
 				msg.ParseMode = ans.Parse
 				msg.ReplyToMessageID = replyTo
 				msg.ReplyMarkup = forceReply
+				send = msg
+			}
 
-				_, err = bot.Send(msg)
+			if send != nil {
+				_, err = bot.Send(send)
 				if err != nil {
 					log.Println("Error sending message:", err)
 				}
 			}
-
 		}()
 	}
 }
 
-// SaveCommand updates or inserts a command
-func SaveCommand(pack, name, param, creator string, db *monebot.Database) (monebot.Command, error) {
+func NewTextAnswer(text string) monebot.Answer {
+	text = RemoveUnsupportedVerbs(text)
+	return monebot.Answer{Text: text, NumParams: CountVerbs(text)}
+}
+
+func NewStickerAnswer(sticker string) monebot.Answer {
+	return monebot.Answer{Sticker: sticker}
+}
+
+// saveCommand updates or inserts a command
+func SaveCommand(pack, name, creator string, ans monebot.Answer, db *monebot.Database) (monebot.Command, error) {
 	var c monebot.Command
 	var err error
 
 	c.Pack = pack
 	c.Name = name
-	c.Answer.Text = RemoveUnsupportedVerbs(param)
-	c.Answer.NumParams = CountVerbs(c.Answer.Text)
+	c.Answer = ans
 	c.Creator = creator
 	c.Time = time.Now()
 
