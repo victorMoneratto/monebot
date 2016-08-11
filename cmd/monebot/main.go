@@ -21,13 +21,13 @@ func main() {
 	log.SetFlags(0)
 
 	// Connect to telegram
-	bot, err := tgbotapi.NewBotAPI(util.MustGetEnv("TELEGRAM_BOT_TOKEN"))
+	bot, err := tgbotapi.NewBotAPI(util.MustGetenv("TELEGRAM_BOT_TOKEN"))
 	if err != nil {
 		panic(err)
 	}
 
 	// Connect to database
-	db, err := monebot.NewDatabase(util.MustGetEnv("DATABASE_CONN_URI"))
+	db, err := monebot.NewDatabase(util.MustGetenv("DATABASE_CONN_URI"))
 	if err != nil {
 		panic(err)
 	}
@@ -39,13 +39,13 @@ func main() {
 		panic(err)
 	}
 
-	log.Println("@"+bot.Self.UserName, "started")
+	log.Printf("@%s started\n", bot.Self.UserName)
 
 	// Indefinitely loop for updates
 	for update := range updates {
 		go func() {
-			var ans monebot.Answer // Set a value for Answer to reply on chat
-			var reply int
+			var ans monebot.Answer
+			var replyTo int
 			var forceReply tgbotapi.ForceReply
 			if update.Message == nil {
 				log.Printf("Received unsupported update: %#v\n", update)
@@ -55,7 +55,7 @@ func main() {
 			log.Printf("Received: '%s' from %s\n", update.Message.Text, update.Message.From)
 
 			if !update.Message.IsCommand() {
-				state, err := db.FindState(update.Message.Chat.ID, update.Message.From.String())
+				state, err := db.FindState(update.Message.Chat.ID, update.Message.From.ID)
 				if err != nil {
 					log.Println("Error finding state:", err)
 					return
@@ -79,30 +79,27 @@ func main() {
 							log.Println("Error saving command:", err)
 							return
 						}
-						ans.Text = fmt.Sprintf("Saved command *%s* `(with %d parameters)`",
-							EscapeMarkdown(c.FullName()), c.Answer.NumParams)
-						ans.Parse = monebot.ParseMarkdown
 
-						err = db.RemoveState(update.Message.Chat.ID, update.Message.From.String())
+						ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
+
+						err = db.RemoveState(update.Message.Chat.ID, update.Message.From.ID)
 						if err != nil {
 							log.Println("Error removing state:", err)
 							return
 						}
 					} else {
-						db.UpsertState(
-							monebot.State{
-								Chat:       update.Message.Chat.ID,
-								User:       update.Message.From.String(),
-								LastUpdate: time.Now(),
-								Waiting: monebot.WaitingState{
-									ForCommand: true,
-									Pack:       pack,
-									Command:    name}})
+						s := monebot.NewWaitingState(update.Message.Chat.ID,
+							update.Message.From.ID,
+							monebot.WaitingState{
+								ForCommand: true,
+								Pack:       pack,
+								Command:    name})
+						db.UpsertState(s)
 
 						if name != "" && param == "" {
 							forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
-							ans.Text = "Please, send me the content for the command"
-							reply = update.Message.MessageID
+							ans.Text, ans.Parse = monebot.MessageMissingContent()
+							replyTo = update.Message.MessageID
 						}
 					}
 				}
@@ -126,25 +123,25 @@ func main() {
 
 					if param == "" {
 						forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
-						s := monebot.State{
-							Chat: update.Message.Chat.ID,
-							User: update.Message.From.String(),
-							Waiting: monebot.WaitingState{
+						s := monebot.NewWaitingState(update.Message.Chat.ID,
+							update.Message.From.ID,
+							monebot.WaitingState{
 								ForCommand: true,
 								Pack:       pack,
-								Command:    name}}
-						err := db.UpsertState(s) // Save that we're waiting for command
+								Command:    name})
+
+						// Save that we're waiting for command
+						err := db.UpsertState(s)
 						if err != nil {
 							log.Println("Error upserting state:", err)
 							return
 						}
 						if name == "" {
-							ans.Text = "Please, send me a name for the command"
+							ans.Text, ans.Parse = monebot.MessageMissingName()
 						} else {
-							ans.Text = "Please, send me a content for the command"
+							ans.Text, ans.Parse = monebot.MessageMissingContent()
 						}
-						reply = update.Message.MessageID
-						break
+						replyTo = update.Message.MessageID
 					} else {
 						// Update or Insert a command
 						c, err := SaveCommand(pack, name, param, update.Message.From.String(), db)
@@ -152,10 +149,7 @@ func main() {
 							log.Println("Error saving command:", err)
 							return
 						}
-						ans.Text = fmt.Sprintf("Saved command *%s* `(with %d parameters)`",
-							EscapeMarkdown(c.FullName()), c.Answer.NumParams)
-						ans.Parse = monebot.ParseMarkdown
-						return
+						ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
 					}
 
 				case "i":
@@ -163,24 +157,11 @@ func main() {
 					pack, name, _, params := Parse(param, update.Message.Chat.ID, db)
 					c, err := db.FindCommand(pack, name, len(params))
 					if err != nil {
-						log.Println("Error finding command:", err)
+						log.Printf("Error finding command '%s.%s': %s", pack, name, err)
 						return
 					}
 
-					year, month, day := c.Time.Date()
-					creator := EscapeMarkdown(c.Creator)
-					if !strings.HasPrefix(c.Creator, "@") {
-						creator = fmt.Sprintf("`%s`", creator)
-					}
-					ans.Text = fmt.Sprintf(
-						"*%s* `(with %d parameters)`\n"+
-							"_%s_\n\n"+
-							"*Last updated by* %s *on* `%d/%d/%d`",
-						EscapeMarkdown(c.FullName()), c.Answer.NumParams,
-						EscapeMarkdown(c.Answer.Text),
-						creator, year, month, day)
-
-					ans.Parse = monebot.ParseMarkdown
+					ans.Text, ans.Parse = monebot.MessageCommandInfo(c)
 
 				default:
 					// Search for a saved command
@@ -199,25 +180,23 @@ func main() {
 					}
 
 					if update.Message.ReplyToMessage != nil {
-						reply = update.Message.ReplyToMessage.MessageID
+						replyTo = update.Message.ReplyToMessage.MessageID
 					}
 				}
 
-				if ans.Text == "" {
-					return
-				}
-
-				log.Printf("Handled command %s: %s.%s %s\n", update.Message.From, pack, name, param)
+				log.Printf("Answered known command from %s: %s.%s [%s]\n", update.Message.From, pack, name, param)
 			}
 
-			msg := tgbotapi.NewMessage(update.Message.Chat.ID, ans.Text)
-			msg.ParseMode = ans.Parse
-			msg.ReplyToMessageID = reply
-			msg.ReplyMarkup = forceReply
+			if ans.Text != "" {
+				msg := tgbotapi.NewMessage(update.Message.Chat.ID, ans.Text)
+				msg.ParseMode = ans.Parse
+				msg.ReplyToMessageID = replyTo
+				msg.ReplyMarkup = forceReply
 
-			_, err = bot.Send(msg)
-			if err != nil {
-				log.Println("Error sending message:", err)
+				_, err = bot.Send(msg)
+				if err != nil {
+					log.Println("Error sending message:", err)
+				}
 			}
 
 		}()
@@ -242,14 +221,6 @@ func SaveCommand(pack, name, param, creator string, db *monebot.Database) (moneb
 	}
 
 	return c, nil
-}
-
-func EscapeMarkdown(s string) string {
-	// TODO a regex to escape links as well
-	return regexp.MustCompile("[\\*_`]").ReplaceAllStringFunc(s,
-		func(match string) string {
-			return "\\" + match
-		})
 }
 
 // CountVerbs returns the number of string verbs (%s, %[1]s...)
@@ -278,7 +249,7 @@ func CountVerbs(s string) int {
 }
 
 // RemoveUnsupportedVerbs returns a cleaner version of a format string,
-// trying to replace most unsupported verbs
+// trying to replace most unsupported Printf verbs (%d, %[1]v, %#v etc.)
 func RemoveUnsupportedVerbs(s string) string {
 	// TODO this regex doesn't match %#s
 	return regexp.MustCompile("%#?(?:\\[\\d+\\])?[^%s\\s\\[]").ReplaceAllStringFunc(s,
@@ -319,6 +290,7 @@ func Parse(message string, chat int64, db *monebot.Database) (pack, name string,
 	if len(nameParts) == 2 {
 		// Pack is explicit in message (<pack>.<name>)
 		pack = strings.TrimSpace(nameParts[0])
+		// NOTE: Maybe this should be extracted to some aliasing function
 		if pack == "default" {
 			pack = ""
 		}

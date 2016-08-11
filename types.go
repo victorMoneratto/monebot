@@ -7,9 +7,13 @@ import (
 
 type State struct {
 	Chat       int64        `bson:"chat"`
-	User       string       `bson:"user"`
+	User       int          `bson:"user"`
 	Waiting    WaitingState `bson:"waiting,omitempty"`
 	LastUpdate time.Time    `bson:"lastUpdate"`
+}
+
+func NewWaitingState(chat int64, user int, w WaitingState) State {
+	return State{Chat: chat, User: user, Waiting: w, LastUpdate: time.Now()}
 }
 
 type WaitingState struct {

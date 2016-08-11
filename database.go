@@ -87,7 +87,7 @@ func (db Database) UpsertCommand(c Command) error {
 	return err
 }
 
-func (db Database) FindState(chat int64, user string) (State, error) {
+func (db Database) FindState(chat int64, user int) (State, error) {
 	var s State
 	err := db.states.Find(
 		bson.M{"chat": chat,
@@ -106,6 +106,6 @@ func (db Database) UpsertState(s State) error {
 	return err
 }
 
-func (db Database) RemoveState(chat int64, user string) error {
+func (db Database) RemoveState(chat int64, user int) error {
 	return db.states.Remove(bson.M{"chat": chat, "user": user})
 }
