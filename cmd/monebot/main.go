@@ -8,12 +8,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
 
 	"github.com/victormoneratto/monebot"
 	"github.com/victormoneratto/monebot/util"
 	"github.com/victormoneratto/telegram-bot-api"
 )
+
+var reply struct {
+	asd int
+}
 
 func main() {
 	// Setup logging for heroku
@@ -45,146 +48,46 @@ func main() {
 	for update := range updates {
 		go func() {
 			var ans monebot.Answer
-			var replyTo int
-			var forceReply tgbotapi.ForceReply
+			var reply struct {
+				To int
+				//forceReply tgbotapi.ForceReply
+			}
+
 			if update.Message == nil {
 				log.Printf("Received unsupported update: %#v\n", update)
 				return
 			}
 
-			log.Printf("Received: '%s' from %s\n", update.Message.Text, update.Message.From)
+			message := update.Message
 
-			if !update.Message.IsCommand() {
-				state, err := db.FindState(update.Message.Chat.ID, update.Message.From.ID)
-				if err != nil {
-					log.Println("Error finding state:", err)
-					return
-				}
+			log.Printf("Received: '%s' from %s\n", message.Text, message.From)
 
-				if state.Waiting.ForCommand {
-					cmd := monebot.Command{}
-					pack, name, param, _ := Parse(update.Message.Text, update.Message.Chat.ID, db)
-
-					if sticker := update.Message.Sticker; sticker != nil {
-						cmd.Answer = NewStickerAnswer(sticker.FileID)
-					} else if state.Waiting.Command != "" {
-						// We already had a name, the whole message is the text content
-						cmd.Answer = NewTextAnswer(update.Message.Text)
-					} else {
-						cmd.Answer = NewTextAnswer(param)
-					}
-
-					if state.Waiting.Pack != "" {
-						cmd.Pack = state.Waiting.Pack
-					} else {
-						cmd.Pack = pack
-					}
-
-					if state.Waiting.Command != "" {
-						cmd.Name = state.Waiting.Command
-					} else {
-						cmd.Name = name
-					}
-
-					if cmd.Name != "" {
-						var c monebot.Command
-						if cmd.Answer.Text != "" || cmd.Answer.Sticker != "" {
-							// NOTE: This should receive the monebot.Command, probably
-							c, err = SaveCommand(cmd.Pack, cmd.Name,
-								update.Message.From.String(), cmd.Answer, db)
-							if err != nil {
-								log.Println("Error saving command:", err)
-								return
-							}
-
-							ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
-
-							err = db.RemoveState(update.Message.Chat.ID, update.Message.From.ID)
-							if err != nil {
-								log.Println("Error removing state:", err)
-								return
-							}
-						} else {
-							s := monebot.NewWaitingState(update.Message.Chat.ID,
-								update.Message.From.ID,
-								monebot.WaitingState{
-									ForCommand: true,
-									Pack:       cmd.Pack,
-									Command:    cmd.Name})
-							db.UpsertState(s)
-
-							replyTo = update.Message.MessageID
-							forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
-							ans.Text, ans.Parse = monebot.MessageMissingContent()
-						}
-					} else {
-						//NOTE: This is the same code for the missing content case, refactor
-						s := monebot.NewWaitingState(update.Message.Chat.ID,
-							update.Message.From.ID,
-							monebot.WaitingState{
-								ForCommand: true,
-								Pack:       pack})
-						db.UpsertState(s)
-
-						replyTo = update.Message.MessageID
-						forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
-						ans.Text, ans.Parse = monebot.MessageMissingName()
+			if message.IsCommand() {
+				pack, name, explicitPack := SplitCmdName(message.Command())
+				if !explicitPack {
+					pack, err = db.FindPack(message.Chat.ID)
+					if err != nil {
+						log.Println("Error finding pack:", err)
+						pack = ""
 					}
 				}
-			} else {
 
-				// Parse command
-				pack, name, param, params := Parse(update.Message.Text, update.Message.Chat.ID, db)
+				param := message.CommandArguments()
 
-				if name == "" {
-					log.Println("Unsupported message text", update.Message.Text)
-					return
-				}
-
-				switch name {
+				switch  name {
 
 				case "neverforget":
 					fallthrough
 				case "never4get":
-					pack, name, param, _ := Parse(param, update.Message.Chat.ID, db)
+					//if space := strings.IndexFunc(param, unicode.IsSpace()) {
+					//
+					//}
 
-					if param == "" {
-						// NOTE: This is almost the same as lines above, REFACTOR IMMEDIATELY
-						replyTo = update.Message.MessageID
-						forceReply = tgbotapi.ForceReply{ForceReply: true, Selective: true}
-						s := monebot.NewWaitingState(update.Message.Chat.ID,
-							update.Message.From.ID,
-							monebot.WaitingState{
-								ForCommand: true,
-								Pack:       pack,
-								Command:    name})
-
-						// Save that we're waiting for command
-						err := db.UpsertState(s)
-						if err != nil {
-							log.Println("Error upserting state:", err)
-							return
-						}
-						if name == "" {
-							ans.Text, ans.Parse = monebot.MessageMissingName()
-						} else {
-							ans.Text, ans.Parse = monebot.MessageMissingContent()
-						}
-					} else {
-						//NOTE: disabled to avoid even more code duplication for now
-						// Update or Insert a command
-						//c, err := SaveCommand(pack, name, NewTextAnswer(param), update.Message.From.String(), db)
-						//if err != nil {
-						//	log.Println("Error saving command:", err)
-						//	return
-						//}
-						//ans.Text, ans.Parse = monebot.MessageSavedCommand(c)
-					}
 
 				case "i":
 					// Show info about command
-					pack, name, _, params := Parse(param, update.Message.Chat.ID, db)
-					c, err := db.FindCommand(pack, name, len(params))
+					paramSlice := SplitParams(param)
+					c, err := db.FindCommand(pack, name, len(paramSlice))
 					if err != nil {
 						log.Printf("Error finding command '%s.%s': %s", pack, name, err)
 						return
@@ -194,27 +97,32 @@ func main() {
 
 				default:
 					// Search for a saved command
-					c, err := db.FindCommand(pack, name, len(params))
+					paramSlice := SplitParams(param)
+					c, err := db.FindCommand(pack, name, len(paramSlice))
 					if err != nil {
 						log.Printf("Error finding command %s.%s %v: %s", pack, name, param, err)
 					}
 
 					ans = c.Answer
 					if c.Answer.NumParams > 0 {
-						p := make([]interface{}, 0, len(params))
-						for _, param := range params {
+						p := make([]interface{}, 0, len(paramSlice))
+						for _, param := range paramSlice {
 							p = append(p, param)
 						}
 						ans.Text = fmt.Sprintf(ans.Text, p...)
 					}
 
 					if update.Message.ReplyToMessage != nil {
-						replyTo = update.Message.ReplyToMessage.MessageID
+						reply.To = update.Message.ReplyToMessage.MessageID
 					}
-				}
 
-				log.Printf("Answered known command from %s: %s.%s [%s]\n", update.Message.From, pack, name, param)
+					log.Printf("Answering known command from %s: %s.%s [%s]\n", update.Message.From, pack, name, param)
+				}
+			} else {
+
 			}
+
+
 
 			var send tgbotapi.Chattable
 			if ans.Sticker != "" {
@@ -223,8 +131,8 @@ func main() {
 			} else if ans.Text != "" {
 				msg := tgbotapi.NewMessage(update.Message.Chat.ID, ans.Text)
 				msg.ParseMode = ans.Parse
-				msg.ReplyToMessageID = replyTo
-				msg.ReplyMarkup = forceReply
+				msg.ReplyToMessageID = reply.To
+				msg.ReplyMarkup = tgbotapi.ForceReply{ForceReply:true, Selective: true}
 				send = msg
 			}
 
@@ -236,6 +144,27 @@ func main() {
 			}
 		}()
 	}
+}
+
+func SplitCmdName(c string) (pack, name string, explicit bool) {
+	parts := strings.SplitN(c, ".", 2)
+
+	switch len(parts) {
+	case 1:
+		pack = ""
+		name = parts[0]
+		explicit = false
+	case 2:
+		pack = parts[0]
+		name = parts[1]
+		explicit = true
+	}
+
+	return
+}
+
+func SplitParams(p string) []string {
+	return strings.Split(p, ", ")
 }
 
 func NewTextAnswer(text string) monebot.Answer {
@@ -272,7 +201,7 @@ func CountVerbs(s string) int {
 	matches := regexp.MustCompile("%(?:\\[(\\d+)\\])?s").FindAllStringSubmatch(s, -1)
 	var numNotIndexed, maxIndex int
 	for _, submatches := range matches {
-		if indexStr := submatches[len(submatches)-1]; indexStr == "" {
+		if indexStr := submatches[len(submatches) - 1]; indexStr == "" {
 			numNotIndexed++
 		} else {
 			index, err := strconv.Atoi(indexStr)
@@ -294,7 +223,6 @@ func CountVerbs(s string) int {
 // RemoveUnsupportedVerbs returns a cleaner version of a format string,
 // trying to replace most unsupported Printf verbs (%d, %[1]v, %#v etc.)
 func RemoveUnsupportedVerbs(s string) string {
-	// TODO this regex doesn't match %#s
 	return regexp.MustCompile("%#?(?:\\[\\d+\\])?[^%s\\s\\[]").ReplaceAllStringFunc(s,
 		func(match string) string {
 			start := strings.IndexRune(match, '[')
@@ -302,7 +230,7 @@ func RemoveUnsupportedVerbs(s string) string {
 
 			// Handle indexed verb
 			if start < end {
-				index, err := strconv.Atoi(match[start+1 : end])
+				index, err := strconv.Atoi(match[start + 1 : end])
 				if err != nil {
 					return "%s"
 				}
@@ -311,46 +239,4 @@ func RemoveUnsupportedVerbs(s string) string {
 
 			return "%s"
 		})
-}
-
-// Parse returns command information from message
-func Parse(message string, chat int64, db *monebot.Database) (pack, name string, param string, params []string) {
-	// Remove heading "/"
-	message = strings.TrimPrefix(message, "/")
-	var fullName string
-	// There's no strings.SplitFunc, we'll separate the first word manually
-	space := strings.IndexFunc(message, unicode.IsSpace)
-	if space != -1 {
-		fullName = message[:space] // Name is just the first word
-		param = strings.TrimSpace(message[space:])
-	} else {
-		fullName = message // Name is the whole message
-		param = ""
-	}
-
-	// Separate fullname into "<pack>.<name>", where "<pack>." is optional
-	nameParts := strings.SplitN(fullName, ".", 2)
-	if len(nameParts) == 2 {
-		// Pack is explicit in message (<pack>.<name>)
-		pack = strings.TrimSpace(nameParts[0])
-		// NOTE: Maybe this should be extracted to some aliasing function
-		if pack == "default" {
-			pack = ""
-		}
-		name = strings.TrimSpace(nameParts[1])
-	} else {
-		// No pack was specified
-		name = nameParts[0]
-		var err error
-		pack, err = db.FindPack(chat)
-		if err != nil {
-			pack = ""
-		}
-	}
-
-	if len(param) > 0 {
-		params = strings.Split(param, ", ")
-	}
-
-	return
 }
